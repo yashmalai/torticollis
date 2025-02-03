@@ -91,25 +91,25 @@ class CervicalDystoniaAnalyzer:
         theta = math.acos(np.clip(cos_theta, -1.0, 1.0))
         return math.degrees(theta)
 
-    def classify_head_tilt(self, angle, direction):
+    def classify_head_flexion(self, angle, direction):
         if direction == "Наклон вперед":
             if angle < 10:
-                return 0, "No"
-            elif 10 <= angle < 15:
-                return 1, "Simple"
-            elif 15 <= angle < 25:
-                return 2, "Have"
+                return 0, "Отсутствует"
+            elif angle < 30:
+                return 1, "Лёгкий"
+            elif angle < 45:
+                return 2, "Умеренный"
             else:
-                return 3, "Extra"
+                return 3, "Выраженный"
         elif direction == "Наклон назад":
             if angle < 10:
-                return 0, "No"
-            elif 10 <= angle < 15:
-                return 1, "Simple"
-            elif 15 <= angle < 25:
-                return 2, "Have"
+                return 0, "Отсутствует"
+            elif angle < 30:
+                return 1, "Лёгкое отклонение"
+            elif angle < 45:
+                return 2, "Умеренное"
             else:
-                return 3, "Extra"
+                return 3, "Выраженное"
         return 0, "N/A"
 
     def process_frame(self, frame):
@@ -131,13 +131,27 @@ class CervicalDystoniaAnalyzer:
             dx = right_eye[0] - left_eye[0]
             dy = right_eye[1] - left_eye[1]
             tilt_angle = math.degrees(math.atan2(dy, dx))
-            if -10 <= tilt_angle <= 10:
-                head_tilt_direction = "Нормальное положение"
-            elif tilt_angle < -10:
-                head_tilt_direction = "Наклон вправо"
+            abs_tilt = abs(tilt_angle)
+
+            if abs_tilt < 1:
+                tilt_severity = 0
+                tilt_description = "Отсутствует"
+            elif abs_tilt <= 15:
+                tilt_severity = 1
+                tilt_description = "Лёгкий"
+            elif abs_tilt <= 35:
+                tilt_severity = 2
+                tilt_description = "Умеренный"
             else:
-                head_tilt_direction = "Наклон влево"
-            results['tilt'] = f"{tilt_angle:.2f}° {head_tilt_direction}"
+                tilt_severity = 3
+                tilt_description = "Выраженный"
+            if tilt_angle < 0:
+                tilt_direction = "Наклон вправо"
+            elif tilt_angle > 0:
+                tilt_direction = "Наклон влево"
+            else:
+                tilt_direction = ""
+            results['tilt'] = f"{abs_tilt:.2f}° {tilt_description} {tilt_direction}"
 
             # 2. Наклон головы вперед/назад (flexion)
             nose_tip = (face_landmarks[1].x * width, face_landmarks[1].y * height)
@@ -146,12 +160,10 @@ class CervicalDystoniaAnalyzer:
             vertical_vector = np.array([0, 1])
             flexion_angle = self.calculate_angle(face_vector, vertical_vector)
             flexion_direction = "Наклон вперед" if face_vector[1] > 0 else "Наклон назад"
-            severity, description = self.classify_head_tilt(flexion_angle, flexion_direction)
-            results['flexion'] = f"{flexion_angle:.2f}° {flexion_direction} - Severity: {severity} ({description})"
+            severity, description = self.classify_head_flexion(flexion_angle, flexion_direction)
+            results['flexion'] = f"{flexion_angle:.2f}° {description} {flexion_direction}"
 
-            # 3. Боковое смещение (lateral shift) по новому принципу:
-            # Рассчитываем смещение по оси X (от носа до средней точки плеч),
-            # нормируя его по ширине плеч.
+            # 3. Боковое смещение (lateral shift)
             if pose_landmarks:
                 left_shoulder = np.array([pose_landmarks[11].x * width, pose_landmarks[11].y * height])
                 right_shoulder = np.array([pose_landmarks[12].x * width, pose_landmarks[12].y * height])
@@ -159,33 +171,33 @@ class CervicalDystoniaAnalyzer:
                 shoulder_width = np.linalg.norm(np.array(left_shoulder) - np.array(right_shoulder))
                 lateral_distance = nose_tip[0] - mid_shoulder[0]
                 ratio_lateral = lateral_distance / shoulder_width
-                # Порог можно подбирать экспериментально, здесь 0.1 как пример
-                if ratio_lateral > 0.1:
-                    lateral_dir = "Right"
-                elif ratio_lateral < -0.1:
-                    lateral_dir = "Left"
+                if abs(ratio_lateral) < 0.1:
+                    results['lateral_shift'] = "0 – Отсутствует"
                 else:
-                    lateral_dir = "Neutral"
-                results['lateral_shift'] = f"Ratio: {ratio_lateral:.2f} ({lateral_dir})"
+                    lateral_dir = "Right" if ratio_lateral > 0 else "Left"
+                    results['lateral_shift'] = f"1 – Присутствует"
             else:
-                # Если данные позы недоступны, рассчитываем по абсолютной разнице
                 mid_shoulder = ((left_eye[0] + right_eye[0]) / 2, (left_eye[1] + right_eye[1]) / 2)
                 lateral_distance = nose_tip[0] - mid_shoulder[0]
-                lateral_dir = "Right" if lateral_distance > 0 else "Left"
-                results['lateral_shift'] = f"{abs(lateral_distance):.2f}px {lateral_dir}"
+                if abs(lateral_distance) < 5:  # Порог в пикселях
+                    results['lateral_shift'] = "0 – Отсутствует"
+                else:
+                    lateral_dir = "Right" if lateral_distance > 0 else "Left"
+                    results['lateral_shift'] = f"1 – Присутствует"
 
-            # 4. Продольное смещение: нормированное отношение расстояния от носа до mid_shoulder к ширине плеч
+            # 4. Продольное смещение (longitudinal shift)
             if pose_landmarks:
                 shoulder_distance = np.linalg.norm(np.array(left_shoulder) - np.array(right_shoulder))
                 longitudinal_distance = np.linalg.norm(np.array(nose_tip) - np.array(mid_shoulder))
                 ratio_longitudinal = longitudinal_distance / shoulder_distance
-                if ratio_longitudinal < 0.95:
-                    longitudinal_dir = "Forward"
-                elif ratio_longitudinal > 1.05:
-                    longitudinal_dir = "Backward"
+                if 0.95 <= ratio_longitudinal <= 1.05:
+                    results['longitudinal_shift'] = "0 – Отсутствует"
                 else:
-                    longitudinal_dir = "Neutral"
-                results['longitudinal_shift'] = f"Ratio: {ratio_longitudinal:.2f} ({longitudinal_dir})"
+                    if ratio_longitudinal < 0.95:
+                        longitudinal_dir = "Forward"
+                    else:
+                        longitudinal_dir = "Backward"
+                    results['longitudinal_shift'] = f"1 – Присутствует"
             else:
                 results['longitudinal_shift'] = "N/A"
 
@@ -195,15 +207,31 @@ class CervicalDystoniaAnalyzer:
                 right_ear = (face_landmarks[454].x * width, face_landmarks[454].y * height)
                 dist_left = np.linalg.norm(np.array(nose_tip) - np.array(left_ear))
                 dist_right = np.linalg.norm(np.array(nose_tip) - np.array(right_ear))
+                # Относительная разница между расстояниями
                 ratio_ears = (dist_left - dist_right) / ((dist_left + dist_right) / 2)
-                yaw_angle = math.degrees(math.atan(ratio_ears))
-                if abs(ratio_ears) < 0.1:
-                    yaw_dir = "Нейтральное положение"
-                elif ratio_ears > 0:
-                    yaw_dir = "Поворот налево"
+                yaw_angle = abs(math.degrees(math.atan(ratio_ears)))
+                if yaw_angle < 1:
+                    rotation_severity = 0
+                    rotation_description = "Отсутствует"
+                elif yaw_angle <= 22:
+                    rotation_severity = 1
+                    rotation_description = "Незначительная"
+                elif yaw_angle <= 45:
+                    rotation_severity = 2
+                    rotation_description = "Лёгкая"
+                elif yaw_angle <= 67:
+                    rotation_severity = 3
+                    rotation_description = "Умеренная"
                 else:
-                    yaw_dir = "Поворот направо"
-                results['rotation'] = f"{abs(yaw_angle):.2f}° {yaw_dir}"
+                    rotation_severity = 4
+                    rotation_description = "Выраженная"
+                if ratio_ears > 0:
+                    yaw_direction = "Поворот налево"
+                elif ratio_ears < 0:
+                    yaw_direction = "Поворот направо"
+                else:
+                    yaw_direction = ""
+                results['rotation'] = f"{yaw_angle:.2f}° {rotation_description} {yaw_direction}"
             except Exception:
                 results['rotation'] = "N/A"
 
@@ -230,28 +258,28 @@ class CervicalDystoniaAnalyzer:
             shoulder_distance = np.linalg.norm(left_shoulder - right_shoulder)
             lateral_distance = nose[0] - mid_shoulder[0]
             ratio_lateral = lateral_distance / shoulder_distance
-            if ratio_lateral > 0.1:
-                lateral_dir = "Right"
-            elif ratio_lateral < -0.1:
-                lateral_dir = "Left"
+            if abs(ratio_lateral) < 0.1:
+                results['lateral_shift'] = "0 – Отсутствует"
             else:
-                lateral_dir = "Neutral"
-            results['lateral_shift'] = f"Ratio: {ratio_lateral:.2f} ({lateral_dir})"
+                lateral_dir = "Right" if ratio_lateral > 0 else "Left"
+                results['lateral_shift'] = f"1 – Присутствует"
+
             longitudinal_distance = np.linalg.norm(np.array(nose) - np.array(mid_shoulder))
             ratio_longitudinal = longitudinal_distance / shoulder_distance
-            if ratio_longitudinal < 0.95:
-                longitudinal_dir = "Forward"
-            elif ratio_longitudinal > 1.05:
-                longitudinal_dir = "Backward"
+            if 0.95 <= ratio_longitudinal <= 1.05:
+                results['longitudinal_shift'] = "0 – Отсутствует"
             else:
-                longitudinal_dir = "Neutral"
-            results['longitudinal_shift'] = f"Ratio: {ratio_longitudinal:.2f} ({longitudinal_dir})"
+                if ratio_longitudinal < 0.95:
+                    longitudinal_dir = "Forward"
+                else:
+                    longitudinal_dir = "Backward"
+                results['longitudinal_shift'] = f"1 – Присутствует"
             face_vector = np.array(nose) - np.array(mid_shoulder)
             vertical_vector = np.array([0, 1])
             flexion_angle = self.calculate_angle(face_vector, vertical_vector)
             flexion_direction = "Наклон вперед" if face_vector[1] > 0 else "Наклон назад"
-            severity, description = self.classify_head_tilt(flexion_angle, flexion_direction)
-            results['flexion'] = f"{flexion_angle:.2f}° {flexion_direction} - Severity: {severity} ({description})"
+            severity, description = self.classify_head_flexion(flexion_angle, flexion_direction)
+            results['flexion'] = f"{flexion_angle:.2f}° {description} {flexion_direction}"
             results['rotation'] = "N/A"
             cv2.circle(output_frame, (int(nose[0]), int(nose[1])), 4, (0, 255, 255), -1)
             cv2.circle(output_frame, (int(left_shoulder[0]), int(left_shoulder[1])), 4, (255, 255, 0), -1)
