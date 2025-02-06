@@ -226,33 +226,40 @@ class CervicalDystoniaAnalyzer:
     def load_photo(self):
         file_path = filedialog.askopenfilename(filetypes=[("Image files", "*.jpg *.jpeg *.png *.bmp")])
         if file_path:
-            image_bgr = cv2.imread(file_path)
-            if image_bgr is None:
-                print("Ошибка при загрузке изображения.")
-                return
-            image_rgb = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2RGB)
-            processed_image, results = self.process_frame(image_rgb)
+            try:
+                with open(file_path, "rb") as f:
+                    image_bytes = np.frombuffer(f.read(), np.uint8)
+                image_bgr = cv2.imdecode(image_bytes, cv2.IMREAD_COLOR)
+                
+                if image_bgr is None:
+                    print("Ошибка при загрузке изображения.")
+                    return
+                
+                image_rgb = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2RGB)
+                processed_image, results = self.process_frame(image_rgb)
 
-            self.canvas.update()
-            canvas_width = self.canvas.winfo_width()
-            canvas_height = self.canvas.winfo_height()
-            pil_image = Image.fromarray(processed_image)
-            image_width, image_height = pil_image.size
-            scale = min(canvas_width / image_width, canvas_height / image_height)
-            new_width = int(image_width * scale)
-            new_height = int(image_height * scale)
-            pil_image = pil_image.resize((new_width, new_height), Image.Resampling.LANCZOS)
-            imgtk = ImageTk.PhotoImage(pil_image)
-            self.canvas.delete("all")
-            self.canvas.imgtk = imgtk
-            self.canvas.create_image(canvas_width / 2, canvas_height / 2, anchor=tk.CENTER, image=imgtk)
+                self.canvas.update()
+                canvas_width = self.canvas.winfo_width()
+                canvas_height = self.canvas.winfo_height()
+                pil_image = Image.fromarray(processed_image)
+                image_width, image_height = pil_image.size
+                scale = min(canvas_width / image_width, canvas_height / image_height)
+                new_width = int(image_width * scale)
+                new_height = int(image_height * scale)
+                pil_image = pil_image.resize((new_width, new_height), Image.Resampling.LANCZOS)
+                imgtk = ImageTk.PhotoImage(pil_image)
+                self.canvas.delete("all")
+                self.canvas.imgtk = imgtk
+                self.canvas.create_image(canvas_width / 2, canvas_height / 2, anchor=tk.CENTER, image=imgtk)
 
-            if results:
-                for key, label in self.stats_labels.items():
-                    label.config(text=str(results.get(key, "N/A")))
-            else:
-                for label in self.stats_labels.values():
-                    label.config(text="N/A")
+                if results:
+                    for key, label in self.stats_labels.items():
+                        label.config(text=str(results.get(key, "N/A")))
+                else:
+                    for label in self.stats_labels.values():
+                        label.config(text="N/A")
+            except Exception as e:
+                print(f"Ошибка при открытии файла: {e}")
 
     def calculate_angle(self, v1, v2):
         dot_product = np.dot(v1, v2)
